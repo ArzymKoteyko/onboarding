@@ -1,0 +1,49 @@
+version: '3.9'
+
+services:
+  api:
+    container_name: api
+    command: python3 api.py
+    env_file: .env
+    build:
+      context: ./app
+      dockerfile: api.dockerfile
+    depends_on:
+      - db
+    ports:
+      - 5678:5678
+
+  client:
+    container_name: client
+    command: gunicorn -w 4 -b 0.0.0.0:5000 client:app
+    env_file: .env
+    build:
+      context: ./app
+      dockerfile: client.dockerfile
+    depends_on:
+      - db
+    ports:
+      - 5000:5000
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    restart: always
+    depends_on:
+      - api 
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+      - ./nginx/etc-letsencrypt:/etc/letsencrypt
+    ports:
+      - 80:80
+      - 443:443
+      - 8000:8000
+
+  db:
+    container_name: db
+    image: postgres:latest
+    env_file: db.env
+    volumes:
+      - ./db_data:/var/lib/postgresql/data
+    ports:
+      - 5432:5432

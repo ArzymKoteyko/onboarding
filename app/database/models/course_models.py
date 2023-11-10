@@ -31,6 +31,7 @@ class Course(Base):
 class Partition(Base):
     __tablename__ = 'partitions'
     id = Column(Integer, primary_key=True, autoincrement=True, unique=True)
+    idx = Column(Integer, nullable=False)
     course_id = Column(Integer, ForeignKey("courses.id"))
     parent_id = Column(Integer, ForeignKey("partitions.id"), nullable=True)
     type = Column(String)
@@ -39,5 +40,9 @@ class Partition(Base):
     created = Column(DateTime, server_default=func.now())
 
     course = relationship("Course", back_populates="partitions")
-    parent = relationship("Partition", back_populates="children", remote_side=[id])
-    children = relationship("Partition", back_populates="parent")
+    parent = relationship("Partition", back_populates="partitions", remote_side=[id])
+    partitions = relationship("Partition", back_populates="parent", remote_side=[parent_id])
+
+class Container(enum.Enum):
+    course = Course
+    partition = Partition

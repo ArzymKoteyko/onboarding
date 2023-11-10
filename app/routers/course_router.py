@@ -1,4 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession 
+from sqlalchemy.orm import selectinload
 from sqlalchemy import select, delete
 from database.db import engine
 
@@ -7,69 +8,18 @@ from fastapi.responses import JSONResponse, Response
 
 from typing import List
 from typing import Optional
+import enum
 
-from schemas.course_shemas import CourseShema
-from database.models import Course
+from schemas.course_shemas import CourseShema, PartitionShema
+from database.models import Course, Partition
 from services.common_services import *
 from services.course_services import *
 
-course_router = APIRouter()
+class Container(enum.Enum):
+    course = Course
+    partition = Partition
 
-COURSE_DEMO = {
-    "id": 0,
-    "title": "Социализация: учимся общаться и адаптироваться в обществе",
-    "percentage": 54,
-    "image": "courses/background_1.jpg",
-    "tags": [
-        {
-            "icon": "dummy",
-            "text": "2 недели"
-        },
-        {
-            "icon": "dummy",
-            "text": "Обязательно"
-        }
-    ],
-    "partitions": [
-        {
-            "id": 0,
-            "type": "text",
-            "name": "partition 1",
-            "partitions": [
-                {
-                    "id": 5,
-                    "type": "video",
-                    "name": "partition 1.1",
-                },
-                {
-                    "id": 6,
-                    "type": "video",
-                    "name": "partition 1.2",
-                }
-            ]
-        },
-        {
-            "id": 1,
-            "type": "text",
-            "name": "partition 2",
-        },
-        {
-            "id": 2,
-            "type": "test",
-            "name": "partition 3",
-        },
-        {
-            "id": 3,
-            "type": "text",
-            "name": "partition 4",
-        },
-        {
-            "id": 4,
-            "type": "test",
-            "name": "partition 5",
-        }
-    ] 
-}
+course_router = APIRouter()
 
 PARTITION_DEMO = {
     "id": 1,
@@ -128,15 +78,21 @@ async def get_courses(limit: int = 0) -> List[CourseShema]:
 @course_router.get('/course', response_model=CourseShema)
 async def get_course(id: int) -> CourseShema:
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        partition = await session.execute(
+        course = await session.execute(
             select(Course).\
-            where(Course.id == id)
+            where(Course.id == id).\
+            options(selectinload(Course.partitions))
         )
-        partition = partition.scalar_one_or_none()
-        if partition == None:
+        course = course.scalar_one_or_none()
+        if course == None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        res = partition_to_dict(partition)
-        res = compute_course(partition)
+        res = partition_to_dict(course)
+        res = compute_course(course)
+        res["partitions"] = []
+        for partition in course.partitions:
+            if partition.parent_id == None:
+                partition_json = await get_partitions_json(partition.id, session)
+                res["partitions"].append(partition_json)
     return JSONResponse(res, status_code=status.HTTP_200_OK)
 
 @course_router.post('/course', response_model=CourseShema)
@@ -169,18 +125,155 @@ async def delete_course(id: int) -> CourseShema:
 
 
 
-@course_router.get('/partition')
-async def get_partition(id: int):
+@course_router.get('/get-partition')
+async def api_get_partition(id: int):
+    """
+    Parameters
+    ----------------------------------------
+    id: int
+        id of partition
+    """
+    # I 
+    # Get partition
     return JSONResponse(PARTITION_DEMO, status_code=status.HTTP_200_OK)
 
-@course_router.post('/partition')
-async def get_partition():
+@course_router.post('/append-partition')
+async def api_append_partition(partition: PartitionShema, container: str, id: int):
+    """
+    Parameters
+    ----------------------------------------
+    partition : PartitionShema 
+        partition data to create
+    id: int
+        id of course or partition in wich new partition will be appended
+    container: str
+        type of parent container ("course" or "partition")
+    """
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        # I
+        # Get parent container list of partitions
+        partitions_list, container_entity = await get_partitions_list(container, id, session)
+        # II
+        # Append new partition to list
+        partition = Partition(
+            course_id=id if type(container_entity) == Course else container_entity.course_id,
+            parent_id=None if type(container_entity) == Course else id,
+            type=partition.type,
+            name=partition.name,
+            content=partition.content
+        )
+        partitions_list.append(partition)
+        # III
+        # Correct partitions indices
+        await correct_indices(container, partitions_list)
+        await session.commit()
+        response = {"id": partition.id}
+    return JSONResponse(response, status_code=status.HTTP_200_OK)
+
+@course_router.post('/insert-partition')
+async def api_insert_partition(partition: PartitionShema, container: str, id: int, idx: int):
+    """
+    Parameters
+    ----------------------------------------
+    partition : PartitionShema 
+        partition data to create
+    container: str
+        type of parent container ("course" or "partition")
+    id: int
+        id of course or partition in wich insertion will happen
+    idx: int 
+        id of partition after which new partition will be inserted
+    """
+    # I
+    # Get parent container list of partitions
+    # II
+    # Insert new partition to list
+    # III
+    # Correct partitions indices
     return JSONResponse(PARTITION_DEMO, status_code=status.HTTP_200_OK)
 
-@course_router.put('/partition')
-async def get_partition():
+@course_router.post('/post-partition')
+async def api_post_partition(partition: PartitionShema):
+    """
+    Parameters
+    ----------------------------------------
+    partition : PartitionShema 
+        partition data to create
+    """
+    # I
+    # Resset [idx, course_id, parent_id] to None
+    # II
+    # Create new partition
     return JSONResponse(PARTITION_DEMO, status_code=status.HTTP_200_OK)
 
-@course_router.delete('/partition')
-async def get_partition():
+@course_router.put('/put-partition')
+async def api_put_partition(partition: PartitionShema):
+    """
+    Parameters
+    ----------------------------------------
+    partition : PartitionShema 
+        partition data to update
+    """
+    # I
+    # Resset [idx, course_id, parent_id] to old values
+    # II
+    # Update partition
+    return JSONResponse(PARTITION_DEMO, status_code=status.HTTP_200_OK)
+
+@course_router.put('/move-partition')
+async def api_move_partition(pcontainer: str, pid: int, tcontainer: str, tip: int, tidx: int) -> None:
+    """
+    Parameters
+    ----------------------------------------
+    pcontainer: str
+        type of parent container ("course" or "partition")
+    pid : int 
+        partition id 
+    tcontainer: str
+        type of target container ("course" or "partition")
+    tip : int 
+        target id (may be another partition or course) if Null act on the same partition/course
+    tidx : int
+        target idx after wich partition will be inserted
+    """
+    # I
+    # Get parent container and target lists of partitions
+    # II
+    # Pop partition from parent list
+    # III
+    # Insert partition to target list
+    # IV
+    # Correct partitions indices
+    return JSONResponse(PARTITION_DEMO, status_code=status.HTTP_200_OK)
+
+@course_router.put('/swap-partitions')
+async def api_swap_partitions(lid: int, rid: int):
+    """
+    Parameters
+    ----------------------------------------
+    lid : int 
+        left partition id 
+    rip : int 
+        right partition id 
+    """
+    # I
+    # Get parent container and target lists of partitions
+    # II
+    # Swap partitions
+    # III
+    # Correct partitions indices
+    return JSONResponse({"left": PARTITION_DEMO, "right": PARTITION_DEMO}, status_code=status.HTTP_200_OK)
+
+@course_router.delete('/delete-partition')
+async def api_delete_partition(id: int):
+    """
+    Parameters
+    ----------------------------------------
+    id : int 
+        partition id 
+    """
+    # I
+    # Delete partition
+    # II
+    # Correct partitions indices
     return JSONResponse(PARTITION_DEMO, status_code=status.HTTP_200_OK)
